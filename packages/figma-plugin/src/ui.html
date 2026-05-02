@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body {
+      font-family: -apple-system, system-ui, sans-serif;
+      font-size: 12px;
+      padding: 12px;
+      margin: 0;
+      color: #333;
+    }
+    h3 { margin: 0 0 10px 0; font-size: 14px; }
+    button {
+      width: 100%;
+      padding: 10px;
+      margin-bottom: 8px;
+      background: #18a0fb;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:disabled { background: #ccc; color: #888; cursor: not-allowed; }
+    button.secondary { background: #444; }
+    button.danger    { background: #c33; }
+
+    .row { display: flex; gap: 6px; }
+    .row > button { flex: 1; }
+
+    #status {
+      padding: 8px;
+      background: #f4f4f4;
+      border-radius: 4px;
+      font-family: ui-monospace, monospace;
+      min-height: 40px;
+      white-space: pre-wrap;
+      font-size: 11px;
+    }
+    .ok  { color: #0a0; }
+    .err { color: #c00; }
+
+    /* Review panel — M7 */
+    #review-panel {
+      display: none;
+      margin-top: 8px;
+      padding: 10px;
+      background: #fffbe6;
+      border: 1px solid #f0c419;
+      border-radius: 4px;
+    }
+    #review-panel.visible { display: block; }
+    #review-panel h4 {
+      margin: 0 0 6px 0;
+      font-size: 12px;
+      color: #856404;
+    }
+    #review-summary {
+      font-family: ui-monospace, monospace;
+      font-size: 11px;
+      white-space: pre-wrap;
+      margin-bottom: 8px;
+      color: #333;
+    }
+    .warning-line {
+      color: #c33;
+      margin-bottom: 4px;
+      font-size: 11px;
+    }
+  </style>
+</head>
+<body>
+  <h3>Bridge</h3>
+  <button id="push-btn" disabled>Push selection to Illustrator</button>
+  <div id="status">Connecting…</div>
+
+  <div id="review-panel">
+    <h4>Review incoming sync</h4>
+    <div id="review-warnings"></div>
+    <div id="review-summary"></div>
+    <div class="row">
+      <button id="accept-btn">Accept</button>
+      <button id="cancel-btn" class="secondary">Cancel</button>
+    </div>
+  </div>
+</body>
+</html>

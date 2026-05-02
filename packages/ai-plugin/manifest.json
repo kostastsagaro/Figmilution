@@ -1,0 +1,27 @@
+{
+  "id": "com.bridge.ai-plugin",
+  "name": "Bridge",
+  "version": "0.6.0",
+  "main": "panel.html",
+  "manifestVersion": 5,
+  "host": [
+    {
+      "app": "ILST",
+      "minVersion": "27.0.0"
+    }
+  ],
+  "entrypoints": [
+    {
+      "type": "panel",
+      "id": "bridge.panel",
+      "label": "Bridge",
+      "minimumSize": { "width": 240, "height": 200 },
+      "preferredDockedSize": { "width": 280, "height": 320 }
+    }
+  ],
+  "requiredPermissions": {
+    "network": {
+      "domains": ["ws://127.0.0.1:7711", "http://127.0.0.1:7711"]
+    }
+  }
+}

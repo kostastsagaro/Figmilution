@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body {
+      font-family: -apple-system, system-ui, sans-serif;
+      font-size: 12px;
+      padding: 12px;
+      color: #ddd;
+      background: #1e1e1e;
+    }
+    button {
+      width: 100%;
+      padding: 10px;
+      margin-bottom: 8px;
+      background: #2d7;
+      color: #000;
+      border: none;
+      border-radius: 4px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:disabled { background: #444; color: #888; cursor: not-allowed; }
+    button.secondary { background: #555; color: #ddd; }
+    button.danger    { background: #c33; color: #fff; }
+
+    .row { display: flex; gap: 6px; }
+    .row > button { flex: 1; }
+
+    #status {
+      padding: 8px;
+      border-radius: 4px;
+      background: #2a2a2a;
+      font-family: ui-monospace, monospace;
+      font-size: 11px;
+      white-space: pre-wrap;
+      min-height: 60px;
+    }
+    .ok { color: #8f8; }
+    .err { color: #f88; }
+
+    /* Review panel — M7 */
+    #review-panel {
+      display: none;
+      margin-top: 8px;
+      padding: 10px;
+      background: #2d2814;
+      border: 1px solid #c89020;
+      border-radius: 4px;
+    }
+    #review-panel.visible { display: block; }
+    #review-panel h4 {
+      margin: 0 0 6px 0;
+      font-size: 12px;
+      color: #ffce5c;
+    }
+    #review-summary {
+      font-family: ui-monospace, monospace;
+      font-size: 11px;
+      white-space: pre-wrap;
+      margin-bottom: 8px;
+      color: #ddd;
+    }
+    .warning-line {
+      color: #ff6464;
+      margin-bottom: 4px;
+      font-size: 11px;
+    }
+  </style>
+</head>
+<body>
+  <button id="push-btn">Push selection to Figma</button>
+  <div id="status">Connecting…</div>
+
+  <div id="review-panel">
+    <h4>Review incoming sync</h4>
+    <div id="review-warnings"></div>
+    <div id="review-summary"></div>
+    <div class="row">
+      <button id="accept-btn">Accept</button>
+      <button id="cancel-btn" class="secondary">Cancel</button>
+    </div>
+  </div>
+
+  <script src="panel.js"></script>
+</body>
+</html>
