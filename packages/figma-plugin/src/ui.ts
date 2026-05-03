@@ -8,8 +8,17 @@ import {
   formatSummary,
 } from '@bridge/shared';
 
-const WS_URL = 'ws://127.0.0.1:7711/bridge';
 const CLIENT_VERSION = '0.7.0';
+const CONNECT_TIMEOUT_MS = 5000;
+const RECONNECT_DELAY_MS = 2000;
+
+const COMPANION_ENDPOINTS = [
+  {
+    label: 'localhost',
+    wsUrl: 'ws://localhost:7711/bridge',
+    healthUrl: 'http://localhost:7711/health',
+  },
+] as const;
 
 const statusEl = document.getElementById('status') as HTMLDivElement;
 const pushBtn = document.getElementById('push-btn') as HTMLButtonElement;
@@ -29,10 +38,38 @@ let assetBaseUrl: string | null = null;
 let isConnected = false;
 let isReviewing = false;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let connectTimeout: ReturnType<typeof setTimeout> | null = null;
+let endpointIndex = 0;
+let attemptId = 0;
+
+function debug(message: string, details?: unknown): void {
+  // eslint-disable-next-line no-console
+  console.log(`[Bridge UI] ${message}`, details ?? '');
+}
+
+function warn(message: string, details?: unknown): void {
+  // eslint-disable-next-line no-console
+  console.warn(`[Bridge UI] ${message}`, details ?? '');
+}
+
+function clearConnectTimeout(): void {
+  if (connectTimeout) {
+    clearTimeout(connectTimeout);
+    connectTimeout = null;
+  }
+}
 
 function send(msg: ClientToCompanion): boolean {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-  ws.send(JSON.stringify(msg));
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    warn('send skipped because socket is not open', {
+      kind: msg.kind,
+      readyState: ws?.readyState,
+    });
+    return false;
+  }
+  const payload = JSON.stringify(msg);
+  debug('sending websocket message', { kind: msg.kind, bytes: payload.length });
+  ws.send(payload);
   return true;
 }
 
@@ -167,11 +204,77 @@ async function finalizePreliminaryDocument(prelim: any): Promise<BridgeDocument>
 
 // ── WS connection ────────────────────────────────────────────────────
 
+async function logHealth(endpoint: (typeof COMPANION_ENDPOINTS)[number], currentAttemptId: number): Promise<void> {
+  try {
+    debug('checking companion health', { attemptId: currentAttemptId, url: endpoint.healthUrl });
+    const res = await fetch(endpoint.healthUrl, { cache: 'no-store' });
+    const text = await res.text();
+    debug('health response', {
+      attemptId: currentAttemptId,
+      status: res.status,
+      ok: res.ok,
+      body: text.slice(0, 300),
+    });
+  } catch (e) {
+    warn('health check failed', {
+      attemptId: currentAttemptId,
+      url: endpoint.healthUrl,
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
+
+function scheduleReconnect(reason: string): void {
+  clearConnectTimeout();
+  isConnected = false;
+  pushBtn.disabled = true;
+  assetBaseUrl = null;
+
+  endpointIndex = (endpointIndex + 1) % COMPANION_ENDPOINTS.length;
+  const nextEndpoint = COMPANION_ENDPOINTS[endpointIndex];
+  setStatus(`Disconnected (${reason}). Retrying ${nextEndpoint.label} in ${RECONNECT_DELAY_MS / 1000}s...`);
+  debug('scheduled reconnect', {
+    reason,
+    nextUrl: nextEndpoint.wsUrl,
+    delayMs: RECONNECT_DELAY_MS,
+  });
+
+  if (!reconnectTimer) {
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, RECONNECT_DELAY_MS);
+  }
+}
+
 function connect() {
-  setStatus('Connecting to companion…');
-  ws = new WebSocket(WS_URL);
+  const endpoint = COMPANION_ENDPOINTS[endpointIndex];
+  const currentAttemptId = ++attemptId;
+
+  clearConnectTimeout();
+  setStatus(`Connecting to companion...\n${endpoint.wsUrl}`);
+  debug('opening websocket', {
+    attemptId: currentAttemptId,
+    wsUrl: endpoint.wsUrl,
+  });
+  void logHealth(endpoint, currentAttemptId);
+
+  ws = new WebSocket(endpoint.wsUrl);
+  const socket = ws;
+
+  connectTimeout = setTimeout(() => {
+    if (ws !== socket || isConnected) return;
+    warn('websocket timed out before welcome', {
+      attemptId: currentAttemptId,
+      url: endpoint.wsUrl,
+      readyState: socket.readyState,
+    });
+    setStatus(`Connection timed out waiting for welcome.\n${endpoint.wsUrl}`);
+    socket.close(4000, 'Bridge UI timeout waiting for welcome');
+  }, CONNECT_TIMEOUT_MS);
 
   ws.onopen = () => {
+    debug('websocket open', { attemptId: currentAttemptId, url: endpoint.wsUrl });
     send({
       kind: 'hello',
       protocolVersion: BRIDGE_PROTOCOL_VERSION,
@@ -181,13 +284,31 @@ function connect() {
   };
 
   ws.onmessage = (ev) => {
+    debug('websocket message received', {
+      attemptId: currentAttemptId,
+      type: typeof ev.data,
+      preview: String(ev.data).slice(0, 300),
+    });
     let msg: CompanionToClient;
     try {
       msg = JSON.parse(String(ev.data)) as CompanionToClient;
-    } catch {
+    } catch (e) {
+      warn('failed to parse websocket message as JSON', {
+        attemptId: currentAttemptId,
+        error: e instanceof Error ? e.message : String(e),
+        raw: String(ev.data).slice(0, 500),
+      });
+      setStatus('Received non-JSON message from companion. See console.', 'err');
       return;
     }
     if (msg.kind === 'welcome') {
+      clearConnectTimeout();
+      debug('welcome received', {
+        attemptId: currentAttemptId,
+        connectionId: msg.connectionId,
+        protocolVersion: msg.protocolVersion,
+        assetBaseUrl: msg.assetBaseUrl,
+      });
       assetBaseUrl = msg.assetBaseUrl;
       isConnected = true;
       pushBtn.disabled = isReviewing;
@@ -195,33 +316,45 @@ function connect() {
     } else if (msg.kind === 'document') {
       // M7: don't apply; ask sandbox to PLAN.
       if (isReviewing) {
-        // eslint-disable-next-line no-console
-        console.warn('[Bridge] Discarding incoming push: prior plan still under review.');
+        warn('discarding incoming push: prior plan still under review');
         return;
       }
       const total = msg.document.containers.reduce((n, c) => n + c.children.length, 0);
       const imgs = Object.keys(msg.document.assets?.images ?? {}).length;
-      setStatus(`Computing plan for ${total} item(s), ${imgs} image(s)…`);
+      setStatus(`Computing plan for ${total} item(s), ${imgs} image(s)...`);
       parent.postMessage(
         { pluginMessage: { kind: 'planDocument', document: msg.document } },
         '*'
       );
     } else if (msg.kind === 'error') {
+      warn('companion returned error message', msg);
       setStatus(`Companion error: ${msg.code}: ${msg.message}`, 'err');
+    } else {
+      warn('unknown companion message kind', msg);
+      setStatus('Unknown companion message. See console.', 'err');
     }
   };
 
-  ws.onclose = () => {
-    isConnected = false;
-    pushBtn.disabled = true;
-    assetBaseUrl = null;
-    setStatus('Disconnected. Retrying…');
-    if (!reconnectTimer) {
-      reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, 2000);
-    }
+  ws.onclose = (ev) => {
+    debug('websocket closed', {
+      attemptId: currentAttemptId,
+      url: endpoint.wsUrl,
+      code: ev.code,
+      reason: ev.reason,
+      wasClean: ev.wasClean,
+    });
+    scheduleReconnect(ev.reason || `close ${ev.code}`);
   };
 
-  ws.onerror = () => setStatus('Socket error', 'err');
+  ws.onerror = (ev) => {
+    warn('websocket error event', {
+      attemptId: currentAttemptId,
+      url: endpoint.wsUrl,
+      readyState: socket.readyState,
+      eventType: ev.type,
+    });
+    setStatus(`Socket error for ${endpoint.wsUrl}. See console.`, 'err');
+  };
 }
 
 // ── Sandbox messaging ────────────────────────────────────────────────

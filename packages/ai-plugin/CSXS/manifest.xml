@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!--
+  CEP manifest for the Bridge Illustrator panel.
+
+  Architecture overview
+  ─────────────────────
+  CEP (Common Extensibility Platform) embeds a Chromium browser (CEF) inside
+  Illustrator. The panel HTML/JS runs in that browser. To talk to Illustrator
+  it calls cs.evalScript("bridge_render(...)") which executes ExtendScript
+  (bridge.jsx) inside the Illustrator engine.
+
+  File layout (relative to this extension's root — packages/ai-plugin/)
+  ───────────────────────────────────────────────────────────────────────
+  CSXS/manifest.xml        ← this file
+  dist/panel.html          ← CEF panel UI  (webpack output)
+  dist/panel.js            ← bundled panel JS (webpack output)
+  dist/CSInterface.js      ← CEP browser bridge library (webpack copy)
+  dist/jsx/bridge.jsx      ← ExtendScript renderer (webpack copy)
+-->
+<ExtensionManifest
+  Version="7.0"
+  ExtensionBundleId="com.bridge.ai-plugin"
+  ExtensionBundleVersion="0.6.0"
+  ExtensionBundleName="Bridge"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+
+  <ExtensionList>
+    <Extension Id="com.bridge.ai-plugin.panel" Version="0.6.0"/>
+  </ExtensionList>
+
+  <ExecutionEnvironment>
+    <HostList>
+      <!--
+        ILST = Illustrator.
+        Version range [24.0,99.9] covers Illustrator 2020 (v24) through any
+        future release. CEP has been available in Illustrator since v16, and
+        unlike UXP it is NOT locked to internal Adobe use.
+      -->
+      <Host Name="ILST" Version="[24.0,99.9]"/>
+    </HostList>
+    <LocaleList>
+      <Locale Code="All"/>
+    </LocaleList>
+    <RequiredRuntimeList>
+      <!--
+        CSXS 9 = shipped with CC 2019 applications.
+        CSXS 10 = CC 2021. CSXS 11 = CC 2022+.
+        9.0 is the safest minimum for Illustrator 24+.
+      -->
+      <RequiredRuntime Name="CSXS" Version="9.0"/>
+    </RequiredRuntimeList>
+  </ExecutionEnvironment>
+
+  <DispatchInfoList>
+    <Extension Id="com.bridge.ai-plugin.panel">
+      <DispatchInfo>
+        <Resources>
+          <!--
+            MainPath   — HTML file loaded into the CEF panel browser.
+                         Relative to the extension bundle root.
+            ScriptPath — ExtendScript file auto-evaluated by Illustrator when
+                         the extension loads. Defines bridge_render() and
+                         bridge_readSelection() for cs.evalScript() calls.
+          -->
+          <MainPath>./dist/panel.html</MainPath>
+          <ScriptPath>./dist/jsx/bridge.jsx</ScriptPath>
+          <CEFCommandLine>
+            <!--
+              Allow the panel's Chromium context to open WebSocket connections
+              to ws://127.0.0.1:7711 (the Bridge companion server).
+            -->
+            <Parameter>--allow-file-access-from-files</Parameter>
+            <Parameter>--allow-running-insecure-content</Parameter>
+          </CEFCommandLine>
+        </Resources>
+        <Lifecycle>
+          <AutoVisible>true</AutoVisible>
+        </Lifecycle>
+        <UI>
+          <Type>Panel</Type>
+          <Menu>Bridge</Menu>
+          <Geometry>
+            <Size>
+              <Height>420</Height>
+              <Width>300</Width>
+            </Size>
+            <MinSize>
+              <Height>200</Height>
+              <Width>240</Width>
+            </MinSize>
+          </Geometry>
+          <Icons/>
+        </UI>
+      </DispatchInfo>
+    </Extension>
+  </DispatchInfoList>
+
+</ExtensionManifest>

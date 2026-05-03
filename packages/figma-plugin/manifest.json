@@ -1,12 +1,15 @@
 {
-  "name": "Bridge",
-  "id": "com.bridge.figma-plugin",
+"name": "Bridge V2",
+"id": "com.bridge.figma-plugin-v2",
   "api": "1.0.0",
   "main": "dist/main.js",
   "ui": "dist/ui.html",
   "editorType": ["figma"],
   "networkAccess": {
-    "allowedDomains": ["ws://127.0.0.1:7711", "http://127.0.0.1:7711"],
+    "allowedDomains": [
+      "http://localhost:7711",
+      "ws://localhost:7711"
+    ],
     "reasoning": "Connects to the local Bridge companion app for design sync."
   }
 }

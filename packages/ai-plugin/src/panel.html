@@ -2,6 +2,12 @@
 <html>
 <head>
   <meta charset="utf-8" />
+  <!--
+    No Content-Security-Policy meta tag here.
+    CEP/Chromium applies its own security model, and the companion WebSocket
+    connection is opened from JavaScript (not declared in HTML).
+    The CEF command-line flags in manifest.xml handle local-file access.
+  -->
   <style>
     body {
       font-family: -apple-system, system-ui, sans-serif;
@@ -9,7 +15,9 @@
       padding: 12px;
       color: #ddd;
       background: #1e1e1e;
+      margin: 0;
     }
+    h3 { margin: 0 0 10px 0; font-size: 14px; color: #fff; }
     button {
       width: 100%;
       padding: 10px;
@@ -37,10 +45,10 @@
       white-space: pre-wrap;
       min-height: 60px;
     }
-    .ok { color: #8f8; }
+    .ok  { color: #8f8; }
     .err { color: #f88; }
 
-    /* Review panel — M7 */
+    /* Review panel */
     #review-panel {
       display: none;
       margin-top: 8px;
@@ -70,7 +78,8 @@
   </style>
 </head>
 <body>
-  <button id="push-btn">Push selection to Figma</button>
+  <h3>Bridge</h3>
+  <button id="push-btn" disabled>Push selection to Figma</button>
   <div id="status">Connecting…</div>
 
   <div id="review-panel">
@@ -83,6 +92,16 @@
     </div>
   </div>
 
+  <!--
+    Load order matters:
+    1. CSInterface.js — defines window.CSInterface (the CEP host bridge).
+       Must be evaluated BEFORE panel.js calls `new CSInterface()`.
+    2. panel.js       — compiled bundle from panel.ts.
+
+    Both files are served from the same dist/ directory as this HTML file,
+    so relative src paths work correctly in the CEP Chromium context.
+  -->
+  <script src="CSInterface.js"></script>
   <script src="panel.js"></script>
 </body>
 </html>

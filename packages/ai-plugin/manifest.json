@@ -2,19 +2,19 @@
   "id": "com.bridge.ai-plugin",
   "name": "Bridge",
   "version": "0.6.0",
-  "main": "panel.html",
   "manifestVersion": 5,
   "host": [
     {
       "app": "ILST",
-      "minVersion": "27.0.0"
+      "minVersion": "26.0"
     }
   ],
   "entrypoints": [
     {
       "type": "panel",
       "id": "bridge.panel",
-      "label": "Bridge",
+      "label": { "default": "Bridge" },
+      "main": "panel.html",
       "minimumSize": { "width": 240, "height": 200 },
       "preferredDockedSize": { "width": 280, "height": 320 }
     }
