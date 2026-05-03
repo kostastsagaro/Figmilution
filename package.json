@@ -13,6 +13,7 @@
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "devDependencies": {
+    "@figma/plugin-typings": "^1.125.0",
     "@types/node": "^20.19.39",
     "typescript": "^5.4.0"
   }

@@ -266,7 +266,7 @@ async function applyMultiStyleText(node: TextNode, ir: IRTextNode): Promise<void
 
       const figmaFills = bridgePaintsToFigma(run.fills);
       if (figmaFills.length > 0) {
-        node.setRangeFills(start, end, figmaFills as readonly SolidPaint[]);
+        node.setRangeFills(start, end, figmaFills as Paint[]);
       }
     } catch (e) {
       // eslint-disable-next-line no-console
@@ -366,10 +366,270 @@ function applyImageGeometry(rect: RectangleNode, ir: IRImageNode): void {
 // TODO MERGE: full bodies from M5/M5.5/M6 patches.
 // ════════════════════════════════════════════════════════════════════════
 
-interface LibraryResolution {
+export interface LibraryResolution {
   colorStyles: Map<string, PaintStyle>;
   textStyles: Map<string, TextStyle>;
   components: Map<string, ComponentNode>;
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Section 4a: M7 top-level exports (lifted from class private methods)
+// ════════════════════════════════════════════════════════════════════════
+
+export function applyColorStyle(style: PaintStyle, def: ColorStyleDef): void {
+  style.name = def.name;
+  if (def.paint.type === 'solid') {
+    const sp = def.paint as BridgeSolidPaint;
+    style.paints = [{
+      type: 'SOLID',
+      color: { r: sp.color.r, g: sp.color.g, b: sp.color.b },
+      opacity: sp.opacity * sp.color.a,
+      visible: sp.visible,
+    }];
+  }
+}
+
+export async function createColorStyle(def: ColorStyleDef): Promise<PaintStyle> {
+  const style = figma.createPaintStyle();
+  applyColorStyle(style, def);
+  style.setSharedPluginData(BRIDGE_SHARED_NAMESPACE, BRIDGE_LIBRARY_BRIDGE_ID_KEY, def.id);
+  return style;
+}
+
+export async function applyTextStyle(style: TextStyle, def: TextStyleDef): Promise<void> {
+  style.name = def.name;
+  const fontName: FontName = {
+    family: def.fontFamily,
+    style: deriveFigmaFontStyle({ fontWeight: def.fontWeight, fontStyle: def.fontStyle }),
+  };
+  try {
+    await figma.loadFontAsync(fontName);
+    style.fontName = fontName;
+  } catch {
+    const fb: FontName = { family: 'Inter', style: 'Regular' };
+    await figma.loadFontAsync(fb);
+    style.fontName = fb;
+  }
+  style.fontSize = def.fontSize;
+  style.letterSpacing = { unit: 'PIXELS', value: def.letterSpacing };
+  if (def.lineHeight > 0) {
+    style.lineHeight = { unit: 'PIXELS', value: def.lineHeight };
+  } else {
+    style.lineHeight = { unit: 'AUTO' };
+  }
+  (style as any).textAlignHorizontal = def.alignH.toUpperCase() as
+    | 'LEFT' | 'CENTER' | 'RIGHT' | 'JUSTIFIED';
+}
+
+export async function createTextStyle(def: TextStyleDef): Promise<TextStyle> {
+  const style = figma.createTextStyle();
+  await applyTextStyle(style, def);
+  return style;
+}
+
+export async function applyComponentDefinition(
+  component: ComponentNode,
+  def: ComponentDef,
+  resolution: LibraryResolution,
+  fetchAsset: (hash: string) => Promise<Uint8Array>
+): Promise<void> {
+  component.name = def.name;
+  component.resize(def.size.width, def.size.height);
+  if (def.background) {
+    component.fills = [colorRgbaToFigmaSolid(def.background)];
+  } else {
+    component.fills = [];
+  }
+  for (const child of [...component.children]) child.remove();
+  for (const ir of def.children) {
+    if (ir.type === 'vector') {
+      const v = figma.createVector();
+      component.appendChild(v);
+      applyVectorGeometry(v, ir);
+      applyVectorVisualsResolved(v, ir, resolution);
+      v.setPluginData(BRIDGE_ID_PLUGIN_KEY, ir.id);
+    } else if (ir.type === 'text') {
+      const t = figma.createText();
+      component.appendChild(t);
+      await applyTextContentResolved(t, ir, resolution);
+      applyTextLayout(t, ir);
+      t.setPluginData(BRIDGE_ID_PLUGIN_KEY, ir.id);
+    } else if (ir.type === 'image') {
+      const r = figma.createRectangle();
+      component.appendChild(r);
+      applyImageGeometry(r, ir);
+      await applyImageFill(r, ir, fetchAsset);
+      r.setPluginData(BRIDGE_ID_PLUGIN_KEY, ir.id);
+    }
+  }
+}
+
+export async function createComponentInPark(
+  def: ComponentDef,
+  pageName: string,
+  resolution: LibraryResolution,
+  fetchAsset: (hash: string) => Promise<Uint8Array>
+): Promise<ComponentNode> {
+  let page: PageNode | undefined;
+  for (const child of figma.root.children) {
+    if (child.type === 'PAGE' && child.name === pageName) {
+      if (typeof (child as PageNode).loadAsync === 'function') {
+        await (child as PageNode).loadAsync();
+      }
+      page = child as PageNode;
+      break;
+    }
+  }
+  if (!page) {
+    page = figma.createPage();
+    page.name = pageName;
+  }
+
+  let lowestBottom = 0;
+  for (const child of page.children) {
+    if ('y' in child && 'height' in child) {
+      const bottom = (child as { y: number; height: number }).y + (child as { y: number; height: number }).height;
+      if (bottom > lowestBottom) lowestBottom = bottom;
+    }
+  }
+
+  const component = figma.createComponent();
+  component.setSharedPluginData(BRIDGE_SHARED_NAMESPACE, BRIDGE_LIBRARY_BRIDGE_ID_KEY, def.id);
+  page.appendChild(component);
+  component.x = 0;
+  component.y = lowestBottom + 50;
+
+  await applyComponentDefinition(component, def, resolution, fetchAsset);
+  return component;
+}
+
+export function applyContainerVisuals(frame: FrameNode, ir: Container): void {
+  frame.name = `[Bridge] ${ir.name}`;
+  frame.resize(ir.size.width, ir.size.height);
+  frame.clipsContent = ir.clipsContent;
+  if (ir.background) {
+    frame.fills = [colorRgbaToFigmaSolid(ir.background)];
+  } else {
+    frame.fills = [];
+  }
+  if (ir.kind === 'pasteboard') {
+    frame.strokes = [{
+      type: 'SOLID', color: { r: 0.6, g: 0.6, b: 0.6 }, opacity: 1, visible: true,
+    }];
+    frame.strokeWeight = 1;
+    frame.dashPattern = [4, 4];
+  } else {
+    frame.strokes = [];
+    frame.dashPattern = [];
+  }
+}
+
+export function detachUserChildrenAndDelete(frame: FrameNode): void {
+  const pageOrigin = { x: frame.x, y: frame.y };
+  const childrenSnapshot = [...frame.children];
+  for (const child of childrenSnapshot) {
+    const id = child.getPluginData(BRIDGE_ID_PLUGIN_KEY);
+    if (!id) {
+      const worldX = pageOrigin.x + ('x' in child ? (child as { x: number }).x : 0);
+      const worldY = pageOrigin.y + ('y' in child ? (child as { y: number }).y : 0);
+      figma.currentPage.appendChild(child);
+      if ('x' in child) (child as { x: number }).x = worldX;
+      if ('y' in child) (child as { y: number }).y = worldY;
+    }
+  }
+  frame.remove();
+}
+
+export async function createLeafAt(
+  ir: IRNode,
+  parent: FrameNode,
+  resolution: LibraryResolution,
+  fetchAsset: (hash: string) => Promise<Uint8Array>
+): Promise<SceneNode> {
+  if (ir.type === 'group') {
+    return await createGroupNode(
+      ir,
+      parent,
+      resolution,
+      fetchAsset,
+      (child, p) => createLeafAt(child, p, resolution, fetchAsset),
+    );
+  }
+  if (ir.type === 'instance') {
+    const inst = await createInstanceLeaf(ir, parent, resolution);
+    if (!inst) {
+      const f = figma.createFrame();
+      parent.appendChild(f);
+      f.x = ir.position.x; f.y = ir.position.y;
+      f.resize(ir.size.width, ir.size.height);
+      f.setPluginData(BRIDGE_ID_PLUGIN_KEY, ir.id);
+      return f;
+    }
+    return inst;
+  }
+  if (ir.type === 'vector') {
+    const v = figma.createVector();
+    parent.appendChild(v);
+    applyVectorGeometry(v, ir);
+    applyVectorVisualsResolved(v, ir, resolution);
+    v.setPluginData(BRIDGE_ID_PLUGIN_KEY, ir.id);
+    return v;
+  }
+  if (ir.type === 'text') {
+    const t = figma.createText();
+    parent.appendChild(t);
+    await applyTextContentResolved(t, ir, resolution);
+    applyTextLayout(t, ir);
+    t.setPluginData(BRIDGE_ID_PLUGIN_KEY, ir.id);
+    return t;
+  }
+  const r = figma.createRectangle();
+  parent.appendChild(r);
+  applyImageGeometry(r, ir);
+  await applyImageFill(r, ir, fetchAsset);
+  r.setPluginData(BRIDGE_ID_PLUGIN_KEY, ir.id);
+  return r;
+}
+
+export async function updateLeafIn(
+  existing: SceneNode,
+  ir: IRNode,
+  resolution: LibraryResolution,
+  fetchAsset: (hash: string) => Promise<Uint8Array>
+): Promise<void> {
+  if (ir.type === 'instance' && existing.type === 'INSTANCE') {
+    const inst = existing as InstanceNode;
+    inst.x = ir.position.x;
+    inst.y = ir.position.y;
+    inst.resize(ir.size.width, ir.size.height);
+    inst.rotation = ir.rotation * (180 / Math.PI);
+    inst.opacity = ir.opacity;
+    inst.visible = ir.visible;
+    inst.locked = ir.locked;
+    inst.name = ir.name;
+    const mainComponent = resolution.components.get(ir.componentId);
+    const currentMain = await inst.getMainComponentAsync();
+    if (mainComponent && currentMain?.id !== mainComponent.id) {
+      inst.swapComponent(mainComponent);
+    }
+    return;
+  }
+  if (ir.type === 'vector' && existing.type === 'VECTOR') {
+    applyVectorGeometry(existing, ir);
+    applyVectorVisualsResolved(existing, ir, resolution);
+    return;
+  }
+  if (ir.type === 'text' && existing.type === 'TEXT') {
+    await applyTextContentResolved(existing, ir, resolution);
+    applyTextLayout(existing, ir);
+    return;
+  }
+  if (ir.type === 'image' && existing.type === 'RECTANGLE') {
+    applyImageGeometry(existing, ir);
+    await applyImageFill(existing, ir, fetchAsset);
+    return;
+  }
+  throw new Error(`updateLeafIn: incompatible types ${existing.type} vs ${ir.type}`);
 }
 
 const COMPONENT_SCAN_WARN_THRESHOLD_MS = 1500;
@@ -434,54 +694,22 @@ class FigmaLibraryReconciler {
 
   // TODO MERGE: applyColorStyle, createColorStyle (M5)
   private applyColorStyle(style: PaintStyle, def: ColorStyleDef): void {
-    style.name = def.name;
-    if (def.paint.type === 'solid') {
-      const sp = def.paint as BridgeSolidPaint;
-      style.paints = [{
-        type: 'SOLID',
-        color: { r: sp.color.r, g: sp.color.g, b: sp.color.b },
-        opacity: sp.opacity * sp.color.a,
-        visible: sp.visible,
-      }];
-    }
+    applyColorStyle(style, def);
   }
 
   private async createColorStyle(def: ColorStyleDef): Promise<PaintStyle> {
-    const style = figma.createPaintStyle();
-    this.applyColorStyle(style, def);
-    style.setSharedPluginData(BRIDGE_SHARED_NAMESPACE, BRIDGE_LIBRARY_BRIDGE_ID_KEY, def.id);
+    const style = await createColorStyle(def);
     return style;
   }
 
   // TODO MERGE: applyTextStyle, createTextStyle (M5)
   private async applyTextStyle(style: TextStyle, def: TextStyleDef): Promise<void> {
-    style.name = def.name;
-    const fontName: FontName = {
-      family: def.fontFamily,
-      style: deriveFigmaFontStyle({ fontWeight: def.fontWeight, fontStyle: def.fontStyle } as TextRun),
-    };
-    try {
-      await figma.loadFontAsync(fontName);
-      style.fontName = fontName;
-    } catch {
-      const fb: FontName = { family: 'Inter', style: 'Regular' };
-      await figma.loadFontAsync(fb);
-      style.fontName = fb;
-    }
-    style.fontSize = def.fontSize;
-    style.letterSpacing = { unit: 'PIXELS', value: def.letterSpacing };
-    if (def.lineHeight > 0) {
-      style.lineHeight = { unit: 'PIXELS', value: def.lineHeight };
-    } else {
-      style.lineHeight = { unit: 'AUTO' };
-    }
-    (style as any).textAlignHorizontal = def.alignH.toUpperCase() as
-      | 'LEFT' | 'CENTER' | 'RIGHT' | 'JUSTIFIED';
+    await applyTextStyle(style, def);
   }
 
   private async createTextStyle(def: TextStyleDef): Promise<TextStyle> {
     const style = figma.createTextStyle();
-    await this.applyTextStyle(style, def);
+    await applyTextStyle(style, def);
     style.setSharedPluginData(BRIDGE_SHARED_NAMESPACE, BRIDGE_LIBRARY_BRIDGE_ID_KEY, def.id);
     return style;
   }
@@ -495,39 +723,7 @@ class FigmaLibraryReconciler {
     resolution: LibraryResolution,
     fetchAsset: (hash: string) => Promise<Uint8Array>
   ): Promise<void> {
-    component.name = def.name;
-    component.resize(def.size.width, def.size.height);
-    if (def.background) {
-      component.fills = [colorRgbaToFigmaSolid(def.background)];
-    } else {
-      component.fills = [];
-    }
-
-    for (const child of [...component.children]) child.remove();
-    for (const ir of def.children) {
-      // TODO MERGE: M6 added GroupNode children; rebuild full leaf
-      // dispatch including 'group' branch.
-      if (ir.type === 'vector') {
-        const v = figma.createVector();
-        component.appendChild(v);
-        applyVectorGeometry(v, ir);
-        applyVectorVisualsResolved(v, ir, resolution);
-        v.setPluginData(BRIDGE_ID_PLUGIN_KEY, ir.id);
-      } else if (ir.type === 'text') {
-        const t = figma.createText();
-        component.appendChild(t);
-        await applyTextContentResolved(t, ir, resolution);
-        applyTextLayout(t, ir);
-        t.setPluginData(BRIDGE_ID_PLUGIN_KEY, ir.id);
-      } else if (ir.type === 'image') {
-        const r = figma.createRectangle();
-        component.appendChild(r);
-        applyImageGeometry(r, ir);
-        await applyImageFill(r, ir, fetchAsset);
-        r.setPluginData(BRIDGE_ID_PLUGIN_KEY, ir.id);
-      }
-      // TODO MERGE: 'group' branch for M6
-    }
+    await applyComponentDefinition(component, def, resolution, fetchAsset);
   }
 
   private async createComponent(
@@ -535,17 +731,7 @@ class FigmaLibraryReconciler {
     resolution: LibraryResolution,
     fetchAsset: (hash: string) => Promise<Uint8Array>
   ): Promise<ComponentNode> {
-    const page = await this.getOrCreateComponentsPage();
-    const component = figma.createComponent();
-    component.setSharedPluginData(BRIDGE_SHARED_NAMESPACE, BRIDGE_LIBRARY_BRIDGE_ID_KEY, def.id);
-    page.appendChild(component);
-
-    const layout = this.computeComponentLayoutPosition(page);
-    component.x = layout.x;
-    component.y = layout.y;
-
-    await this.applyComponent(component, def, resolution, fetchAsset);
-    return component;
+    return createComponentInPark(def, BRIDGE_COMPONENTS_PAGE_NAME, resolution, fetchAsset);
   }
 
   private computeComponentLayoutPosition(page: PageNode): { x: number; y: number } {
@@ -766,90 +952,12 @@ class FigmaReconciler {
 
   // M5/M6 createLeaf
   private async createLeaf(ir: IRNode, parent: FrameNode): Promise<SceneNode> {
-    if (ir.type === 'group') {
-      return await createGroupNode(
-        ir,
-        parent,
-        this.resolution,
-        this.fetchAsset,
-        (child, p) => this.createLeaf(child, p),
-      );
-    }
-    if (ir.type === 'instance') {
-      const inst = await createInstanceLeaf(ir, parent, this.resolution);
-      if (!inst) {
-        const f = figma.createFrame();
-        parent.appendChild(f);
-        f.x = ir.position.x; f.y = ir.position.y;
-        f.resize(ir.size.width, ir.size.height);
-        f.setPluginData(BRIDGE_ID_PLUGIN_KEY, ir.id);
-        return f;
-      }
-      return inst;
-    }
-    if (ir.type === 'vector') {
-      const v = figma.createVector();
-      parent.appendChild(v);
-      applyVectorGeometry(v, ir);
-      applyVectorVisualsResolved(v, ir, this.resolution);
-      v.setPluginData(BRIDGE_ID_PLUGIN_KEY, ir.id);
-      return v;
-    }
-    if (ir.type === 'text') {
-      const t = figma.createText();
-      parent.appendChild(t);
-      await applyTextContentResolved(t, ir, this.resolution);
-      applyTextLayout(t, ir);
-      t.setPluginData(BRIDGE_ID_PLUGIN_KEY, ir.id);
-      return t;
-    }
-    // image
-    const r = figma.createRectangle();
-    parent.appendChild(r);
-    applyImageGeometry(r, ir);
-    await applyImageFill(r, ir, this.fetchAsset);
-    r.setPluginData(BRIDGE_ID_PLUGIN_KEY, ir.id);
-    return r;
+    return createLeafAt(ir, parent, this.resolution, this.fetchAsset);
   }
 
   // TODO MERGE: updateLeaf with all M5/M6 type branches.
   private async updateLeaf(existing: SceneNode, ir: IRNode): Promise<void> {
-    if (ir.type === 'instance' && existing.type === 'INSTANCE') {
-      const inst = existing as InstanceNode;
-      inst.x = ir.position.x;
-      inst.y = ir.position.y;
-      inst.resize(ir.size.width, ir.size.height);
-      inst.rotation = ir.rotation * (180 / Math.PI);
-      inst.opacity = ir.opacity;
-      inst.visible = ir.visible;
-      inst.locked = ir.locked;
-      inst.name = ir.name;
-      const mainComponent = this.resolution.components.get(ir.componentId);
-      const currentMain = await inst.getMainComponentAsync();
-      if (mainComponent && currentMain?.id !== mainComponent.id) {
-        inst.swapComponent(mainComponent);
-      }
-      return;
-    }
-    if (ir.type === 'vector' && existing.type === 'VECTOR') {
-      applyVectorGeometry(existing, ir);
-      applyVectorVisualsResolved(existing, ir, this.resolution);
-      return;
-    }
-    if (ir.type === 'text' && existing.type === 'TEXT') {
-      await applyTextContentResolved(existing, ir, this.resolution);
-      applyTextLayout(existing, ir);
-      return;
-    }
-    if (ir.type === 'image' && existing.type === 'RECTANGLE') {
-      applyImageGeometry(existing, ir);
-      await applyImageFill(existing, ir, this.fetchAsset);
-      return;
-    }
-    // TODO MERGE: 'group' update branch — should remove and recreate
-    // group contents, or recurse into the group's reconciliation.
-    // The M6 design didn't fully spec this; treat as replace for now.
-    throw new Error(`updateLeaf: incompatible types ${existing.type} vs ${ir.type}`);
+    return updateLeafIn(existing, ir, this.resolution, this.fetchAsset);
   }
 
   // TODO MERGE: reconcileFrameChildren — M4 implementation. Walks
@@ -883,41 +991,12 @@ class FigmaReconciler {
 
   // TODO MERGE: applyContainerVisuals — M4 base, M6 added clipsContent.
   private applyContainerVisuals(frame: FrameNode, ir: Container): void {
-    frame.name = `[Bridge] ${ir.name}`;
-    frame.resize(ir.size.width, ir.size.height);
-    frame.clipsContent = ir.clipsContent; // M6
-    if (ir.background) {
-      frame.fills = [colorRgbaToFigmaSolid(ir.background)];
-    } else {
-      frame.fills = [];
-    }
-    if (ir.kind === 'pasteboard') {
-      frame.strokes = [{
-        type: 'SOLID', color: { r: 0.6, g: 0.6, b: 0.6 }, opacity: 1, visible: true,
-      }];
-      frame.strokeWeight = 1;
-      frame.dashPattern = [4, 4];
-    } else {
-      frame.strokes = [];
-      frame.dashPattern = [];
-    }
+    applyContainerVisuals(frame, ir);
   }
 
   // TODO MERGE: detachUserChildrenAndDelete (M4)
   private detachUserChildrenAndDelete(frame: FrameNode): void {
-    const pageOrigin = { x: frame.x, y: frame.y };
-    const childrenSnapshot = [...frame.children];
-    for (const child of childrenSnapshot) {
-      const id = child.getPluginData(BRIDGE_ID_PLUGIN_KEY);
-      if (!id) {
-        const worldX = pageOrigin.x + ('x' in child ? child.x : 0);
-        const worldY = pageOrigin.y + ('y' in child ? child.y : 0);
-        figma.currentPage.appendChild(child);
-        if ('x' in child) child.x = worldX;
-        if ('y' in child) child.y = worldY;
-      }
-    }
-    frame.remove();
+    detachUserChildrenAndDelete(frame);
   }
 
   // M5: library reconciler runs first

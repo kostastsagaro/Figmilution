@@ -1103,7 +1103,7 @@ function hasDeepInstanceOverrides(ir: IRInstanceNode): boolean {
       for (const groupChild of child.children) {
         if (groupChild.type === 'instance' && hasDeepInstanceOverrides(groupChild)) return true;
       }
-      if (child.clipPath?.type === 'instance' && hasDeepInstanceOverrides(child.clipPath)) {
+      if ((child.clipPath as any)?.type === 'instance' && hasDeepInstanceOverrides(child.clipPath as any)) {
         return true;
       }
     }

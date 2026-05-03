@@ -79,7 +79,7 @@ async function uploadBytes(bytes: Uint8Array, format: string): Promise<UploadRes
   const res = await fetch(`${assetBaseUrl}/assets`, {
     method: 'POST',
     headers: { 'Content-Type': format },
-    body: bytes,
+    body: bytes as any,
   });
   if (!res.ok) throw new Error(`upload failed: HTTP ${res.status}`);
   return await res.json() as UploadResult;
