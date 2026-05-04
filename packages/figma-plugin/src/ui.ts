@@ -158,38 +158,70 @@ async function finalizePreliminaryDocument(prelim: any): Promise<BridgeDocument>
     return `${bytes.length}-${head}-${tail}`;
   }
 
-  async function uploadOne(prelimImg: { bytes: Uint8Array; format: string; byteLength: number }, rendered: { width: number; height: number }): Promise<ImageRef> {
-    const key = quickKey(prelimImg.bytes);
+  async function uploadOne(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    prelimImg: { bytes: any; format: string; byteLength: number; dataBase64: string },
+    rendered: { width: number; height: number }
+  ): Promise<ImageRef> {
+    // postMessage structured-clone may deliver Uint8Array as a plain object in
+    // some Figma versions. Reconstruct proper binary from dataBase64 (always a
+    // string) so the fetch body is always a valid BufferSource.
+    let safeBytes: Uint8Array;
+    if (prelimImg.bytes instanceof Uint8Array) {
+      safeBytes = prelimImg.bytes;
+    } else {
+      const b64 = prelimImg.dataBase64.replace(/^data:[^;]+;base64,/, '');
+      const binary = atob(b64);
+      safeBytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) safeBytes[i] = binary.charCodeAt(i);
+    }
+
+    const key = quickKey(safeBytes);
     const existing = inflight.get(key);
     if (existing) return existing;
     const p = (async () => {
-      const result = await uploadBytes(prelimImg.bytes, prelimImg.format);
+      // The companion /assets upload is best-effort. Illustrator reads images
+      // directly from dataBase64 (inline), and the Figma applyImageFill path
+      // also prefers dataBase64. If the upload fails (size limit, server down,
+      // etc.) the document is still fully self-contained.
+      let hash = `inline-${key}`;
+      let byteLength = safeBytes.byteLength;
+      try {
+        const result = await uploadBytes(safeBytes, prelimImg.format);
+        hash = result.hash;
+        byteLength = result.byteLength;
+      } catch (e) {
+        warn('asset upload failed — carrying image inline', e instanceof Error ? e.message : String(e));
+      }
       const ref: ImageRef = {
-        hash: result.hash,
+        hash,
         format: prelimImg.format,
         naturalSize: { width: rendered.width, height: rendered.height },
-        byteLength: result.byteLength,
+        byteLength,
+        dataBase64: prelimImg.dataBase64,
       };
-      assets[result.hash] = ref;
+      assets[hash] = ref;
       return ref;
     })();
     inflight.set(key, p);
     return p;
   }
 
-  async function walkContainer(container: any): Promise<void> {
-    for (let i = 0; i < container.children.length; i++) {
-      const child = container.children[i];
+  async function walkChildren(children: any[]): Promise<void> {
+    if (!Array.isArray(children)) return;
+    for (const child of children) {
       if (child.type === 'image' && child.preliminaryImage) {
         const ref = await uploadOne(child.preliminaryImage, child.size);
         delete child.preliminaryImage;
         child.image = ref;
       }
-      // TODO MERGE: M5 instance / M6 group recursion
+      if (Array.isArray(child.children)) {
+        await walkChildren(child.children);
+      }
     }
   }
 
-  for (const c of prelim.containers) await walkContainer(c);
+  for (const c of prelim.containers) await walkChildren(c.children);
 
   return {
     schemaVersion: prelim.schemaVersion,
@@ -314,16 +346,16 @@ function connect() {
       pushBtn.disabled = isReviewing;
       setStatus('Connected. Ready to push or receive.', 'ok');
     } else if (msg.kind === 'document') {
-      // M7: don't apply; ask sandbox to PLAN.
+      // Append-only: never diff, never delete — just paste as new nodes.
       if (isReviewing) {
         warn('discarding incoming push: prior plan still under review');
         return;
       }
       const total = msg.document.containers.reduce((n, c) => n + c.children.length, 0);
       const imgs = Object.keys(msg.document.assets?.images ?? {}).length;
-      setStatus(`Computing plan for ${total} item(s), ${imgs} image(s)...`);
+      setStatus(`Placing ${total} item(s), ${imgs} image(s) on canvas…`);
       parent.postMessage(
-        { pluginMessage: { kind: 'planDocument', document: msg.document } },
+        { pluginMessage: { kind: 'appendDocument', document: msg.document } },
         '*'
       );
     } else if (msg.kind === 'error') {

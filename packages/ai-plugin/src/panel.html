@@ -2,105 +2,289 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <!--
-    No Content-Security-Policy meta tag here.
-    CEP/Chromium applies its own security model, and the companion WebSocket
-    connection is opened from JavaScript (not declared in HTML).
-    The CEF command-line flags in manifest.xml handle local-file access.
-  -->
   <style>
-    body {
-      font-family: -apple-system, system-ui, sans-serif;
-      font-size: 12px;
-      padding: 12px;
-      color: #ddd;
-      background: #1e1e1e;
-      margin: 0;
+    :root {
+      color-scheme: dark;
+      --bg: #202020;
+      --panel: #292929;
+      --panel-2: #303030;
+      --line: #3b3b3b;
+      --text: #e4e4e4;
+      --muted: #9a9a9a;
+      --accent: #7dd3fc;
+      --accent-strong: #38bdf8;
+      --danger: #f87171;
     }
-    h3 { margin: 0 0 10px 0; font-size: 14px; color: #fff; }
-    button {
-      width: 100%;
-      padding: 10px;
-      margin-bottom: 8px;
-      background: #2d7;
-      color: #000;
-      border: none;
-      border-radius: 4px;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    button:disabled { background: #444; color: #888; cursor: not-allowed; }
-    button.secondary { background: #555; color: #ddd; }
-    button.danger    { background: #c33; color: #fff; }
 
-    .row { display: flex; gap: 6px; }
-    .row > button { flex: 1; }
+    * { box-sizing: border-box; }
+
+    body {
+      min-width: 220px;
+      min-height: 220px;
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 12px;
+      letter-spacing: 0;
+      overflow: hidden;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      min-height: 220px;
+      height: 100vh;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 10px 8px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      font-weight: 650;
+      color: #f4f4f4;
+    }
+
+    .mark {
+      width: 18px;
+      height: 18px;
+      border: 1px solid #5c5c5c;
+      border-radius: 4px;
+      display: grid;
+      place-items: center;
+      color: var(--accent);
+      background: #242424;
+      font-size: 11px;
+    }
+
+    .connection-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #777;
+    }
+
+    .connection-dot.connected { background: #65d46e; }
+    .connection-dot.error { background: var(--danger); }
+
+    main {
+      padding: 10px;
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      gap: 10px;
+      min-height: 0;
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    button {
+      appearance: none;
+      border: 1px solid #474747;
+      border-radius: 6px;
+      background: var(--panel);
+      color: var(--text);
+      min-height: 58px;
+      padding: 8px 6px;
+      display: grid;
+      place-items: center;
+      gap: 4px;
+      cursor: pointer;
+      font: inherit;
+    }
+
+    button svg {
+      width: 20px;
+      height: 20px;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      fill: none;
+    }
+
+    button .label {
+      font-size: 11px;
+      line-height: 1.1;
+      white-space: normal;
+      text-align: center;
+    }
+
+    button:hover:not(:disabled) {
+      border-color: #5f5f5f;
+      background: var(--panel-2);
+      color: #fff;
+    }
+
+    button.primary {
+      color: #dff6ff;
+      border-color: #3b6f83;
+      background: #26343a;
+    }
+
+    button.primary:hover:not(:disabled) {
+      border-color: var(--accent-strong);
+      background: #293d45;
+    }
+
+    button:disabled {
+      opacity: .42;
+      cursor: default;
+    }
+
+    .options {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #242424;
+    }
+
+    .toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .toggle input {
+      width: 15px;
+      height: 15px;
+      margin: 0;
+      accent-color: var(--accent-strong);
+    }
+
+    .pending {
+      min-height: 54px;
+      padding: 8px;
+      border-radius: 6px;
+      background: #181818;
+      border: 1px solid #303030;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 11px;
+      line-height: 1.35;
+      white-space: pre-wrap;
+      overflow: auto;
+    }
+
+    footer {
+      border-top: 1px solid var(--line);
+      background: #181818;
+      padding: 7px 10px;
+      height: auto;
+      min-height: 32px;
+      max-height: 200px;
+      display: flex;
+      align-items: flex-start;
+      overflow-y: scroll;
+    }
 
     #status {
-      padding: 8px;
-      border-radius: 4px;
-      background: #2a2a2a;
-      font-family: ui-monospace, monospace;
-      font-size: 11px;
+      width: 100%;
+      color: var(--muted);
       white-space: pre-wrap;
-      min-height: 60px;
+      overflow-wrap: anywhere;
+      word-wrap: break-word;
+      user-select: text;
+      cursor: text;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 11px;
+      line-height: 1.35;
     }
-    .ok  { color: #8f8; }
-    .err { color: #f88; }
 
-    /* Review panel */
-    #review-panel {
-      display: none;
-      margin-top: 8px;
-      padding: 10px;
-      background: #2d2814;
-      border: 1px solid #c89020;
+    #status.ok  { color: #8ee89a; }
+    #status.err {
+      color: #ffb3b3;
+      background: #2a1010;
+      padding: 4px 6px;
       border-radius: 4px;
     }
-    #review-panel.visible { display: block; }
-    #review-panel h4 {
-      margin: 0 0 6px 0;
-      font-size: 12px;
-      color: #ffce5c;
-    }
-    #review-summary {
-      font-family: ui-monospace, monospace;
+
+    #tooltip {
+      position: fixed;
+      z-index: 20;
+      max-width: 190px;
+      padding: 6px 7px;
+      border-radius: 5px;
+      background: #111;
+      border: 1px solid #4a4a4a;
+      color: #f2f2f2;
       font-size: 11px;
-      white-space: pre-wrap;
-      margin-bottom: 8px;
-      color: #ddd;
+      line-height: 1.25;
+      pointer-events: none;
+      opacity: 0;
+      transform: translate(-50%, -6px);
+      transition: opacity 80ms ease;
+      box-shadow: 0 8px 18px rgba(0, 0, 0, .35);
     }
-    .warning-line {
-      color: #ff6464;
-      margin-bottom: 4px;
-      font-size: 11px;
-    }
+
+    #tooltip.visible { opacity: 1; }
   </style>
 </head>
 <body>
-  <h3>Bridge</h3>
-  <button id="push-btn" disabled>Push selection to Figma</button>
-  <div id="status">Connecting…</div>
+  <div class="shell">
+    <header>
+      <div class="brand">
+        <div class="mark">B</div>
+        <div>Bridge</div>
+      </div>
+      <div id="connection-dot" class="connection-dot"></div>
+    </header>
 
-  <div id="review-panel">
-    <h4>Review incoming sync</h4>
-    <div id="review-warnings"></div>
-    <div id="review-summary"></div>
-    <div class="row">
-      <button id="accept-btn">Accept</button>
-      <button id="cancel-btn" class="secondary">Cancel</button>
-    </div>
+    <main>
+      <div class="actions">
+        <button id="pull-btn" class="primary" disabled data-tooltip="Render incoming Figma design">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 4v11"></path>
+            <path d="m7 10 5 5 5-5"></path>
+            <path d="M5 20h14"></path>
+          </svg>
+          <span class="label">Pull</span>
+        </button>
+
+        <button id="push-btn" disabled data-tooltip="Send selected Illustrator items out">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 20V9"></path>
+            <path d="m7 14 5-5 5 5"></path>
+            <path d="M5 4h14"></path>
+          </svg>
+          <span class="label">Push</span>
+        </button>
+      </div>
+
+      <div class="options">
+        <label class="toggle" data-tooltip="Render incoming Figma payloads immediately">
+          <input id="auto-render" type="checkbox" />
+          <span>Auto-Render</span>
+        </label>
+      </div>
+
+      <div id="pending-info" class="pending">No incoming payload.</div>
+    </main>
+
+    <footer>
+      <div id="status">Connecting...</div>
+    </footer>
   </div>
 
-  <!--
-    Load order matters:
-    1. CSInterface.js — defines window.CSInterface (the CEP host bridge).
-       Must be evaluated BEFORE panel.js calls `new CSInterface()`.
-    2. panel.js       — compiled bundle from panel.ts.
+  <div id="tooltip"></div>
 
-    Both files are served from the same dist/ directory as this HTML file,
-    so relative src paths work correctly in the CEP Chromium context.
-  -->
   <script src="CSInterface.js"></script>
   <script src="panel.js"></script>
 </body>

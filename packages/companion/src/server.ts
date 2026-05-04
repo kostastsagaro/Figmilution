@@ -16,13 +16,15 @@ async function main(): Promise<void> {
   await store.init();
 
   const app = express();
-  app.use(express.json({ limit: '4mb' }));
+  app.use(express.json({ limit: '50mb' }));
   app.use(buildRoutes(store));
 
   const server = http.createServer(app);
+  // Allow up to 5 minutes for large image uploads.
+  server.requestTimeout = 300_000;
 
   const assetBaseUrl = `http://${HOST}:${PORT}`;
-  const hub = new WsHub(assetBaseUrl);
+  const hub = new WsHub(assetBaseUrl, { maxPayload: 50 * 1024 * 1024 });
   hub.attach(server);
 
   server.listen(PORT, HOST, () => {

@@ -52,6 +52,49 @@ interface ExecutionResult {
   executedOps: number;
 }
 
+// ────────────────────────────────────────────────────────────────────────
+// Append-only paste: creates new nodes without touching existing ones.
+// Used for inbound Illustrator pushes — no diffing, no deletions.
+// ────────────────────────────────────────────────────────────────────────
+
+export async function appendBridgeDocument(
+  doc: BridgeDocument,
+  fetchAsset: (hash: string) => Promise<Uint8Array>
+): Promise<{ nodeCount: number }> {
+  const resolution = {
+    colorStyles: new Map<string, PaintStyle>(),
+    textStyles: new Map<string, TextStyle>(),
+    components: new Map<string, ComponentNode>(),
+  };
+
+  const center = figma.viewport.center;
+  const pageOrigin = {
+    x: center.x - doc.documentBounds.size.width / 2,
+    y: center.y - doc.documentBounds.size.height / 2,
+  };
+
+  let nodeCount = 0;
+  for (const container of doc.containers) {
+    const frame = figma.createFrame();
+    figma.currentPage.appendChild(frame);
+    frame.x = pageOrigin.x + container.documentPosition.x;
+    frame.y = pageOrigin.y + container.documentPosition.y;
+    // No bridgeId stamp — these are "pasted" copies, not sync-owned nodes.
+    applyContainerVisuals(frame, container);
+
+    for (const ir of container.children) {
+      try {
+        await createLeafAt(ir, frame, resolution, fetchAsset);
+        nodeCount++;
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[Bridge] appendBridgeDocument: skipped', ir.type, ir.name, e);
+      }
+    }
+  }
+  return { nodeCount };
+}
+
 const BRIDGE_COMPONENTS_PAGE_NAME = 'Bridge Components';
 
 export async function executePlan(

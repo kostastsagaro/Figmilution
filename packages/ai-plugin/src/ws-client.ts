@@ -5,7 +5,7 @@ import {
   type CompanionToClient,
 } from '@bridge/shared';
 
-const COMPANION_WS_URL = 'ws://127.0.0.1:7711/bridge';
+const COMPANION_WS_URL = 'ws://localhost:7711/bridge';
 const CLIENT_VERSION = '0.6.0';
 
 type StatusListener = (status: 'connecting' | 'connected' | 'disconnected' | 'error', detail?: string) => void;

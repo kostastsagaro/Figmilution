@@ -205,6 +205,8 @@ export interface ImageRef {
   format: string;
   naturalSize: Size2D;
   byteLength: number;
+  /** Optional inline bytes, base64 encoded. Used by ExtendScript renderers. */
+  dataBase64?: string;
 }
 
 export interface ImageNode extends NodeBase {

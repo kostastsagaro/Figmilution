@@ -331,6 +331,31 @@ function applyTextLayout(node: TextNode, ir: IRTextNode): void {
 // Section 3: Image (M4 with hash short-circuit)
 // ════════════════════════════════════════════════════════════════════════
 
+// Pure-JS base64 decoder — atob is not available in the Figma sandbox.
+const _b64chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+const _b64lookup: Record<string, number> = {};
+for (let _bi = 0; _bi < _b64chars.length; _bi++) _b64lookup[_b64chars[_bi]!] = _bi;
+
+function base64ToBytes(b64str: string): Uint8Array {
+  const str = b64str.replace(/^data:[^;]+;base64,/, '').replace(/[^A-Za-z0-9+/=]/g, '');
+  const len = str.length;
+  let outputLen = Math.floor(len * 3 / 4);
+  if (str[len - 1] === '=') outputLen--;
+  if (str[len - 2] === '=') outputLen--;
+  const bytes = new Uint8Array(outputLen);
+  let byteIdx = 0;
+  for (let i = 0; i < len; i += 4) {
+    const a = _b64lookup[str[i]] ?? 0;
+    const b = _b64lookup[str[i + 1]] ?? 0;
+    const c = _b64lookup[str[i + 2]] ?? 0;
+    const d = _b64lookup[str[i + 3]] ?? 0;
+    bytes[byteIdx++] = (a << 2) | (b >> 4);
+    if (byteIdx < outputLen) bytes[byteIdx++] = ((b & 15) << 4) | (c >> 2);
+    if (byteIdx < outputLen) bytes[byteIdx++] = ((c & 3) << 6) | d;
+  }
+  return bytes;
+}
+
 async function applyImageFill(
   rect: RectangleNode,
   ir: IRImageNode,
@@ -339,7 +364,14 @@ async function applyImageFill(
   const previousHash = rect.getPluginData('bridgeImageHash');
   if (previousHash === ir.image.hash) return;
   try {
-    const bytes = await fetchAsset(ir.image.hash);
+    let bytes: Uint8Array;
+    if (ir.image.dataBase64) {
+      // Inline base64 path — used when Illustrator embeds image data directly
+      // (no companion server upload needed; works for AI→Figma transfers).
+      bytes = base64ToBytes(ir.image.dataBase64);
+    } else {
+      bytes = await fetchAsset(ir.image.hash);
+    }
     const figmaImage = figma.createImage(bytes);
     rect.fills = [{ type: 'IMAGE', scaleMode: 'FIT', imageHash: figmaImage.hash }];
     rect.setPluginData('bridgeImageHash', ir.image.hash);

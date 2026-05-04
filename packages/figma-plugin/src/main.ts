@@ -18,7 +18,7 @@ import {
 } from '@bridge/shared';
 import { selectionToPreliminaryDocument } from './figma-to-ir';
 import { planDocument } from './figma-planner';
-import { executePlan } from './figma-executor';
+import { executePlan, appendBridgeDocument } from './figma-executor';
 
 figma.showUI(__html__, { width: 320, height: 380 });
 
@@ -120,20 +120,35 @@ async function handlePushRequest(): Promise<void> {
   }
 }
 
-interface PlanDocumentMessage { kind: 'planDocument'; document: BridgeDocument; }
-interface AcceptPlanMessage   { kind: 'acceptPlan'; }
-interface CancelPlanMessage   { kind: 'cancelPlan'; }
-interface RequestPushMessage  { kind: 'requestPush'; }
+interface PlanDocumentMessage   { kind: 'planDocument';   document: BridgeDocument; }
+interface AppendDocumentMessage { kind: 'appendDocument'; document: BridgeDocument; }
+interface AcceptPlanMessage     { kind: 'acceptPlan'; }
+interface CancelPlanMessage     { kind: 'cancelPlan'; }
+interface RequestPushMessage    { kind: 'requestPush'; }
 
 type IncomingMessage =
   | PlanDocumentMessage
+  | AppendDocumentMessage
   | AcceptPlanMessage
   | CancelPlanMessage
   | AssetReplyMessage
   | RequestPushMessage;
 
+async function handleAppendRequest(doc: BridgeDocument): Promise<void> {
+  try {
+    const result = await appendBridgeDocument(doc, fetchAsset);
+    figma.ui.postMessage({ kind: 'applyResult', ok: true, count: result.nodeCount });
+  } catch (e) {
+    const err = e instanceof Error ? e.message : String(e);
+    figma.ui.postMessage({ kind: 'applyResult', ok: false, error: err });
+  }
+}
+
 figma.ui.onmessage = async (msg: IncomingMessage) => {
   switch (msg.kind) {
+    case 'appendDocument':
+      await handleAppendRequest(msg.document);
+      return;
     case 'planDocument':
       await handlePlanRequest(msg.document);
       return;

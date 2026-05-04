@@ -25,10 +25,17 @@ interface Connection {
 export class WsHub {
   private connections = new Map<string, Connection>();
 
-  constructor(private readonly assetBaseUrl: string) {}
+  constructor(
+    private readonly assetBaseUrl: string,
+    private readonly options: { maxPayload?: number } = {}
+  ) {}
 
   attach(server: import('http').Server): void {
-    const wss = new WebSocketServer({ server, path: '/bridge' });
+    const wss = new WebSocketServer({
+      server,
+      path: '/bridge',
+      maxPayload: this.options.maxPayload ?? 50 * 1024 * 1024,
+    });
 
     wss.on('connection', (socket) => {
       const conn: Connection = {

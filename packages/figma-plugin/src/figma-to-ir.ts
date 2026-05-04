@@ -41,6 +41,7 @@ export interface PreliminaryImageRef {
   bytes: Uint8Array;
   format: string;
   byteLength: number;
+  dataBase64: string;
 }
 
 export interface PreliminaryImageNode extends Omit<IRImageNode, 'image'> {
@@ -148,6 +149,24 @@ function sniffImageFormat(bytes: Uint8Array): string {
     return 'image/webp';
   }
   return 'application/octet-stream';
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  // Pure-JS encoder — btoa and String.fromCharCode spread are both unavailable
+  // or unreliable in the Figma sandbox. This works on any Uint8Array size.
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  const len = bytes.length;
+  let result = '';
+  for (let i = 0; i < len; i += 3) {
+    const b0 = bytes[i]!;
+    const b1 = i + 1 < len ? bytes[i + 1]! : 0;
+    const b2 = i + 2 < len ? bytes[i + 2]! : 0;
+    result += chars[b0 >> 2]!;
+    result += chars[((b0 & 3) << 4) | (b1 >> 4)]!;
+    result += i + 1 < len ? chars[((b1 & 15) << 2) | (b2 >> 6)]! : '=';
+    result += i + 2 < len ? chars[b2 & 63]! : '=';
+  }
+  return result;
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -896,6 +915,11 @@ function findImagePaint(fills: readonly Paint[] | typeof figma.mixed): ImagePain
   return null;
 }
 
+// Raw image bytes larger than this threshold get re-exported at a capped width
+// to keep the document JSON payload manageable over WebSocket.
+const MAX_IMAGE_BYTES = 2 * 1024 * 1024; // 2 MB
+const MAX_EXPORT_WIDTH = 1500; // px
+
 async function imageBearingNodeToIR(
   node: SceneNode,
   originOffset: Point2D,
@@ -903,9 +927,40 @@ async function imageBearingNodeToIR(
 ): Promise<PreliminaryImageNode | null> {
   const { position, size, rotation } = readNodePosition(node, originOffset);
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const bytes: Uint8Array = await (node as any).exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 2 } });
-    const format = sniffImageFormat(bytes);
+    let bytes: Uint8Array;
+    let format: string;
+
+    // Prefer raw source bytes via getImageByHash — preserves original quality
+    // and format (JPEG stays JPEG). Falls back to exportAsync for nodes whose
+    // IMAGE fill hash is unavailable or whose raw bytes exceed the size cap.
+    let rawBytes: Uint8Array | null = null;
+    if ('fills' in node) {
+      const fills = (node as { fills: readonly Paint[] | typeof figma.mixed }).fills;
+      if (fills !== figma.mixed) {
+        const imgFill = fills.find((p) => p.type === 'IMAGE' && p.visible !== false) as ImagePaint | undefined;
+        if (imgFill?.imageHash) {
+          try {
+            const img = figma.getImageByHash(imgFill.imageHash);
+            if (img) rawBytes = await img.getBytesAsync();
+          } catch { /* fall through */ }
+        }
+      }
+    }
+
+    if (rawBytes && rawBytes.byteLength <= MAX_IMAGE_BYTES) {
+      // Small enough to carry as-is — preserves original format.
+      bytes = rawBytes;
+      format = sniffImageFormat(bytes);
+    } else {
+      // Oversized source image or unavailable hash — re-export at capped width.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      bytes = await (node as any).exportAsync({
+        format: 'PNG',
+        constraint: { type: 'WIDTH', value: MAX_EXPORT_WIDTH },
+      });
+      format = 'image/png';
+    }
+
     return {
       type: 'image',
       id: stableId(node),
@@ -917,7 +972,12 @@ async function imageBearingNodeToIR(
       position,
       size,
       rotation,
-      preliminaryImage: { bytes, format, byteLength: bytes.byteLength },
+      preliminaryImage: {
+        bytes,
+        format,
+        byteLength: bytes.byteLength,
+        dataBase64: bytesToBase64(bytes),
+      },
       sourceMeta: { figmaType: node.type },
     };
   } catch (e) {

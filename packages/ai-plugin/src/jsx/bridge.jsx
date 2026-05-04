@@ -43,8 +43,6 @@
  *   left = figmaX
  */
 
-#target illustrator
-
 // ── JSON polyfill (Illustrator 24+ ships JSON; guard for older hosts) ─────────
 
 if (typeof JSON === 'undefined') {
@@ -88,6 +86,158 @@ function extend(base, extra) {
     if (extra.hasOwnProperty(k)) base[k] = extra[k];
   }
   return base;
+}
+
+// ── Base64 encoder + decoder (bidirectional image transfer) ─────────────────
+
+var BASE64_LOOKUP = (function () {
+  var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  var t = {};
+  for (var i = 0; i < chars.length; i++) t[chars.charAt(i)] = i;
+  return t;
+}());
+
+function decodeBase64ToBinaryString(b64) {
+  b64 = b64.replace(/^data:[^;]+;base64,/, '').replace(/\s/g, '');
+  var len    = b64.length;
+  var lookup = BASE64_LOOKUP;
+  var buf    = [];
+  for (var i = 0; i < len; i += 4) {
+    var a   = lookup[b64.charAt(i)]   || 0;
+    var bv  = lookup[b64.charAt(i+1)] || 0;
+    var cv  = b64.charAt(i+2);
+    var dv  = b64.charAt(i+3);
+    var c   = lookup[cv] || 0;
+    var d   = lookup[dv] || 0;
+    buf.push(String.fromCharCode((a << 2) | (bv >> 4)));
+    if (cv && cv !== '=') buf.push(String.fromCharCode(((bv & 0xf) << 4) | (c >> 2)));
+    if (dv && dv !== '=') buf.push(String.fromCharCode(((c & 0x3) << 6) | d));
+  }
+  return buf.join('');
+}
+
+function writeTempImageFile(b64Data, format) {
+  var ext = (format === 'image/jpeg') ? 'jpg' : 'png';
+  var tmp = new File(Folder.temp + '/bridge_' + new Date().getTime() + '.' + ext);
+  tmp.encoding = 'binary';
+  tmp.open('w');
+  tmp.write(decodeBase64ToBinaryString(b64Data));
+  tmp.close();
+  return tmp;
+}
+
+// Encode a binary string (from File.read() in binary mode) to base64.
+function encodeBase64(binaryStr) {
+  var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  var len   = binaryStr.length;
+  var buf   = [];
+  for (var i = 0; i < len; i += 3) {
+    var b0 = binaryStr.charCodeAt(i)     & 0xff;
+    var b1 = (i + 1 < len) ? binaryStr.charCodeAt(i + 1) & 0xff : 0;
+    var b2 = (i + 2 < len) ? binaryStr.charCodeAt(i + 2) & 0xff : 0;
+    buf.push(chars.charAt(b0 >> 2));
+    buf.push(chars.charAt(((b0 & 3) << 4) | (b1 >> 4)));
+    buf.push((i + 1 < len) ? chars.charAt(((b1 & 0xf) << 2) | (b2 >> 6)) : '=');
+    buf.push((i + 2 < len) ? chars.charAt(b2 & 0x3f) : '=');
+  }
+  return buf.join('');
+}
+
+// Export any Illustrator item to a temp PNG and return a base64 data-URI string.
+// Uses a temporary document so the artboard matches the item's bounds exactly.
+function exportItemAsPngBase64(item) {
+  var bounds = item.geometricBounds; // [left, top, right, bottom]
+  var w = Math.abs(bounds[2] - bounds[0]);
+  var h = Math.abs(bounds[1] - bounds[3]);
+  if (w <= 0 || h <= 0) return null;
+
+  var tmpFile  = new File(Folder.temp + '/bridge_export_' + new Date().getTime() + '.png');
+  var tempDoc  = null;
+  try {
+    tempDoc = app.documents.add(DocumentColorSpace.RGB, w, h);
+    var dupe = item.duplicate(tempDoc.layers[0], ElementPlacement.PLACEATEND);
+    dupe.position = [0, 0];
+
+    var opts           = new ExportOptionsPNG24();
+    opts.antiAliasing  = true;
+    opts.transparency  = true;
+    opts.artBoardClipping = true;
+    tempDoc.exportFile(tmpFile, ExportType.PNG24, opts);
+    tempDoc.close(SaveOptions.DONOTSAVECHANGES);
+    tempDoc = null;
+
+    if (!tmpFile.exists) return null;
+    tmpFile.encoding = 'binary';
+    tmpFile.open('r');
+    var bytes = tmpFile.read();
+    tmpFile.close();
+    try { tmpFile.remove(); } catch (eRm) {}
+
+    return 'data:image/png;base64,' + encodeBase64(bytes);
+  } catch (eExp) {
+    if (tempDoc) { try { tempDoc.close(SaveOptions.DONOTSAVECHANGES); } catch (eC) {} }
+    return null;
+  }
+}
+
+// Try to read a linked file's raw bytes as a base64 data-URI.
+function readLinkedFileAsBase64(file, mimeType) {
+  if (!file || !file.exists) return null;
+  try {
+    file.encoding = 'binary';
+    file.open('r');
+    var bytes = file.read();
+    file.close();
+    return 'data:' + (mimeType || 'image/png') + ';base64,' + encodeBase64(bytes);
+  } catch (eRead) {
+    return null;
+  }
+}
+
+// ── Font matching helper ─────────────────────────────────────────────────────
+
+function fontStyleNameToWeight(styleName) {
+  var s = (styleName || '').toLowerCase();
+  if (/black|heavy/.test(s))     return 900;
+  if (/extrabold|ultra/.test(s)) return 800;
+  if (/semibold|demi/.test(s))   return 600;
+  if (/bold/.test(s))            return 700;
+  if (/medium/.test(s))          return 500;
+  if (/light/.test(s))           return 300;
+  if (/thin|hairline/.test(s))   return 100;
+  return 400;
+}
+
+/**
+ * Returns the best TextFont for (fontFamily, fontWeight, fontStyle).
+ * Tries the PostScript name first; then walks app.textFonts to find the
+ * closest family + weight + italic match.
+ */
+function findBestFont(fontFamily, fontWeight, fontStyle, postScriptName) {
+  if (postScriptName) {
+    try { return app.textFonts.getByName(postScriptName); } catch (e) {}
+  }
+  if (!fontFamily) return null;
+
+  var wantWeight = fontWeight || 400;
+  var wantItalic = (fontStyle === 'italic' || fontStyle === 'oblique');
+  var allFonts   = app.textFonts;
+  var candidates = [];
+  var i;
+  for (i = 0; i < allFonts.length; i++) {
+    try { if (allFonts[i].family === fontFamily) candidates.push(allFonts[i]); } catch (e) {}
+  }
+  if (!candidates.length) return null;
+
+  var best = null, bestScore = 999999;
+  for (i = 0; i < candidates.length; i++) {
+    var cf      = candidates[i];
+    var cStyle  = (cf.style || '').toLowerCase();
+    var cItalic = /italic|oblique/.test(cStyle);
+    var score   = Math.abs(fontStyleNameToWeight(cStyle) - wantWeight) + (cItalic !== wantItalic ? 10000 : 0);
+    if (score < bestScore) { bestScore = score; best = cf; }
+  }
+  return best;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -248,6 +398,8 @@ function applyTextStyles(tf, node) {
     // Character-level styling
     for (var r = 0; r < runs.length; r++) {
       var run = runs[r];
+      // Resolve font once per run (iterating app.textFonts is expensive)
+      var runFont = findBestFont(run.fontFamily, run.fontWeight, run.fontStyle, run.postScriptName);
       try {
         var chars = tf.textRange.characters;
         for (var ci = run.start; ci < run.end && ci < chars.length; ci++) {
@@ -255,12 +407,7 @@ function applyTextStyles(tf, node) {
 
           if (run.fontSize)      ca.size     = run.fontSize;
           if (run.letterSpacing) ca.tracking = run.letterSpacing;
-
-          // Font lookup: try PostScript name first, then family name
-          var fontName = run.postScriptName || run.fontFamily;
-          if (fontName) {
-            try { ca.textFont = app.textFonts.getByName(fontName); } catch (fe) {}
-          }
+          if (runFont) { try { ca.textFont = runFont; } catch (fe) {} }
 
           // Fill colour from run
           if (run.fills && run.fills.length) {
@@ -330,8 +477,8 @@ function renderVectorNode(layer, node, absX, absY, aiLeft, aiTop, w, h, artX, ar
 function buildPathFromSubpath(pathItem, subpath, absX, absY, artX, artY) {
   var anchors = subpath.anchors || [];
 
-  // Clear the default path point that Illustrator adds to new PathItems
-  pathItem.setEntirePath([]);
+  // Clear any default path point that Illustrator adds to new PathItems
+  try { pathItem.setEntirePath([]); } catch (eClear) {}
 
   for (var i = 0; i < anchors.length; i++) {
     var a  = anchors[i];
@@ -352,16 +499,37 @@ function buildPathFromSubpath(pathItem, subpath, absX, absY, artX, artY) {
 // ── Image rendering ──────────────────────────────────────────────────────────
 
 function renderImageNode(layer, node, aiLeft, aiTop, w, h) {
-  // Images require downloading bytes from the companion and writing a temp
-  // file, which is complex.  For now, render a labelled grey rectangle as a
-  // placeholder.  The `note` property stores the asset hash so the
-  // placeholder can be replaced by a future update pass.
+  var imageRef = node.image;
+
+  if (imageRef && imageRef.dataBase64) {
+    try {
+      var tmpFile = writeTempImageFile(imageRef.dataBase64, imageRef.format || 'image/png');
+      if (tmpFile.exists) {
+        var placed = layer.placedItems.add();
+        placed.file = tmpFile;
+        // Resize to the target bounds from the Figma payload
+        if (w && h) {
+          placed.width  = w;
+          placed.height = h;
+        }
+        placed.position = [aiLeft, aiTop];
+        // Embed so the temp file can be reclaimed by the OS
+        try { placed.embed(); } catch (eEmbed) {}
+        if (typeof node.opacity === 'number') placed.opacity = node.opacity * 100;
+        return placed;
+      }
+    } catch (eImg) {
+      // fall through to placeholder
+    }
+  }
+
+  // Placeholder: grey rectangle annotated with the asset hash
   var rect  = layer.pathItems.rectangle(aiTop, aiLeft, w, h);
   var gray  = new GrayColor();
-  gray.gray = 80; // 80 % grey
+  gray.gray = 80;
   rect.fillColor = gray;
   rect.stroked   = false;
-  rect.note      = 'bridge:image:' + ((node.image && node.image.hash) || 'unknown');
+  rect.note      = 'bridge:image:' + ((imageRef && imageRef.hash) || 'unknown');
   if (typeof node.opacity === 'number') rect.opacity = node.opacity * 100;
   return rect;
 }
@@ -422,6 +590,13 @@ function applyStrokes(item, strokes) {
 // OUTBOUND: Illustrator → Figma (selection reading)
 // ═════════════════════════════════════════════════════════════════════════════
 
+// Date.prototype.toISOString is ES5 — not available in ExtendScript (ES3).
+function isoDate(d) {
+  function pad(n, len) { var s = String(n); while (s.length < len) s = '0' + s; return s; }
+  return pad(d.getFullYear(), 4) + '-' + pad(d.getMonth() + 1, 2) + '-' + pad(d.getDate(), 2) +
+    'T' + pad(d.getHours(), 2) + ':' + pad(d.getMinutes(), 2) + ':' + pad(d.getSeconds(), 2) + 'Z';
+}
+
 function selectionToDocument() {
   if (app.documents.length === 0)
     throw new Error('No document open in Illustrator.');
@@ -464,7 +639,7 @@ function selectionToDocument() {
     }],
     library:    { components: {}, colorStyles: {}, textStyles: {} },
     assets:     { images: {} },
-    generatedAt: now.toISOString()
+    generatedAt: isoDate(now)
   };
 }
 
@@ -477,6 +652,8 @@ function itemToNode(item, artX, artY) {
       case 'PathItem':         return pathItemToNode(item, artX, artY);
       case 'CompoundPathItem': return compoundPathToNode(item, artX, artY);
       case 'GroupItem':        return groupItemToNode(item, artX, artY);
+      case 'PlacedItem':       return placedItemToNode(item, artX, artY);
+      case 'RasterItem':       return rasterItemToNode(item, artX, artY);
     }
   } catch (e) {}
   return null;
@@ -615,6 +792,56 @@ function buildSubpathsFromItem(pathItem, artX, artY) {
   return [{ closed: pathItem.closed, anchors: anchors }];
 }
 
+// ── PlacedItem / RasterItem → image IR ──────────────────────────────────────
+
+function imageItemToNode(item, artX, artY, b64) {
+  if (!b64) return null;
+  var base = nodeBaseFromItem(item, artX, artY);
+  // Use the item's UUID as a stable content hash; prefix avoids collisions
+  // with Figma-originated hashes which use SHA-256.
+  var hash = 'ai-' + (item.uuid || String(Math.floor(Math.random() * 1e15))).replace(/[^a-zA-Z0-9]/g, '');
+  return extend(base, {
+    type:  'image',
+    image: {
+      hash:        hash,
+      format:      'image/png',
+      naturalSize: { width: base.size.width, height: base.size.height },
+      byteLength:  0,
+      dataBase64:  b64
+    }
+  });
+}
+
+// PlacedItem: try the linked source file first; fall back to temp-doc export.
+function placedItemToNode(item, artX, artY) {
+  var b64 = null;
+
+  // If the item has a linked file, read it directly (preserves original format).
+  try {
+    var mimeType = 'image/png';
+    if (item.file && item.file.name) {
+      var name = item.file.name.toLowerCase();
+      if (/\.jpe?g$/.test(name)) mimeType = 'image/jpeg';
+    }
+    b64 = readLinkedFileAsBase64(item.file, mimeType);
+  } catch (e) {}
+
+  // Embedded or inaccessible link → export via temp document.
+  if (!b64) b64 = exportItemAsPngBase64(item);
+
+  return imageItemToNode(item, artX, artY, b64);
+}
+
+// RasterItem: same strategy — linked file first, then temp-doc export.
+function rasterItemToNode(item, artX, artY) {
+  var b64 = null;
+  try {
+    b64 = readLinkedFileAsBase64(item.file, 'image/png');
+  } catch (e) {}
+  if (!b64) b64 = exportItemAsPngBase64(item);
+  return imageItemToNode(item, artX, artY, b64);
+}
+
 // ── Group item → IR ──────────────────────────────────────────────────────────
 
 function groupItemToNode(item, artX, artY) {
@@ -671,3 +898,7 @@ function aiItemToStrokes(item) {
     join:   'miter'
   }];
 }
+
+// Sentinel: ensures $.evalFile returns a plain string primitive so CEP's
+// callback serialization never encounters a Function or Object return value.
+'BRIDGE_LOADED';

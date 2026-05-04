@@ -67,7 +67,7 @@
           <CEFCommandLine>
             <!--
               Allow the panel's Chromium context to open WebSocket connections
-              to ws://127.0.0.1:7711 (the Bridge companion server).
+              to ws://localhost:7711 (the Bridge companion server).
             -->
             <Parameter>--allow-file-access-from-files</Parameter>
             <Parameter>--allow-running-insecure-content</Parameter>
